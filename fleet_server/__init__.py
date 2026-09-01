@@ -1,1 +1,1 @@
-"""Duo fleet server: centralized coordination for teleop data collection."""
+"""Teleop Data Server: centralized coordination for teleop data collection."""

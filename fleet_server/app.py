@@ -35,7 +35,7 @@ TOKEN = os.environ.get("FLEET_TOKEN", "")
 DEFAULT_TARGET = int(os.environ.get("FLEET_DEFAULT_TARGET", "20"))
 
 db = Database(DATA_DIR, default_target=DEFAULT_TARGET)
-app = FastAPI(title="Duo Fleet Server", version="1.0")
+app = FastAPI(title="Teleop Data Server", version="1.0")
 
 _UUID_RE = re.compile(r"^[0-9a-f]{32}$")
 _SCENE_ID_RE = re.compile(r"^[A-Za-z0-9._\-]{1,255}$")

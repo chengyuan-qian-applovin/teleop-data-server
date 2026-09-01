@@ -1,4 +1,4 @@
-# Duo Fleet Server
+# Teleop Data Server
 
 Centralized coordination for multi-headset teleop data collection (the
 `sharpa_duo` scripts in IsaacLab). One small HTTP server is the single source
@@ -20,7 +20,7 @@ shows live progress.
 Needs Python ≥ 3.10. On the machine that will host the server:
 
 ```bash
-git clone <this repo> duo-fleet-server && cd duo-fleet-server
+git clone <this repo> teleop-data-server && cd teleop-data-server
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -82,15 +82,15 @@ curl -X PATCH -H "X-Fleet-Token: $FLEET_TOKEN" -H "Content-Type: application/jso
 ```ini
 # /etc/systemd/system/duo-fleet.service
 [Unit]
-Description=Duo fleet server
+Description=Teleop Data Server
 After=network.target
 
 [Service]
 User=fleet
-WorkingDirectory=/opt/duo-fleet-server
-Environment=FLEET_DATA_DIR=/opt/duo-fleet-server/fleet_data
+WorkingDirectory=/opt/teleop-data-server
+Environment=FLEET_DATA_DIR=/opt/teleop-data-server/fleet_data
 Environment=FLEET_TOKEN=change-me
-ExecStart=/opt/duo-fleet-server/.venv/bin/uvicorn fleet_server.app:app --host 0.0.0.0 --port 8080 --workers 1
+ExecStart=/opt/teleop-data-server/.venv/bin/uvicorn fleet_server.app:app --host 0.0.0.0 --port 8080 --workers 1
 Restart=on-failure
 
 [Install]
