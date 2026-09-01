@@ -2,7 +2,7 @@
 
 Run with exactly one worker process (the state store serializes in-process):
 
-    uvicorn fleet_server.app:app --host 0.0.0.0 --port 8080 --workers 1
+    uvicorn fleet_server.app:app --host 0.0.0.0 --port 8099 --workers 1
 
 Environment:
 
@@ -13,10 +13,16 @@ Environment:
   at ``/`` stays open (read-only, server-rendered).
 - ``FLEET_DEFAULT_TARGET``: target successes for scenes created without an
   explicit target (default 20).
+- ``FLEET_SYNC_DEST``: a ``gs://bucket/prefix`` to back the data dir up to
+  periodically (unset = no syncing). See ``sync.py``.
+- ``FLEET_SYNC_INTERVAL_S``: seconds between syncs (default 300).
+- ``FLEET_GCLOUD``: the ``gcloud`` binary to sync with (default: from PATH).
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import html
 import json
@@ -29,13 +35,31 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from .db import WORKER_TTL_S, Database
+from .sync import Syncer
 
 DATA_DIR = os.environ.get("FLEET_DATA_DIR", "./fleet_data")
 TOKEN = os.environ.get("FLEET_TOKEN", "")
 DEFAULT_TARGET = int(os.environ.get("FLEET_DEFAULT_TARGET", "20"))
+SYNC_DEST = os.environ.get("FLEET_SYNC_DEST", "")
+SYNC_INTERVAL_S = float(os.environ.get("FLEET_SYNC_INTERVAL_S", "300"))
+GCLOUD = os.environ.get("FLEET_GCLOUD", "gcloud")
 
 db = Database(DATA_DIR, default_target=DEFAULT_TARGET)
-app = FastAPI(title="Teleop Data Server", version="1.0")
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    sync_task = None
+    if SYNC_DEST:
+        sync_task = asyncio.create_task(Syncer(db, SYNC_DEST, SYNC_INTERVAL_S, GCLOUD).run_forever())
+    yield
+    if sync_task:
+        sync_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sync_task
+
+
+app = FastAPI(title="Teleop Data Server", version="1.0", lifespan=lifespan)
 
 _UUID_RE = re.compile(r"^[0-9a-f]{32}$")
 _SCENE_ID_RE = re.compile(r"^[A-Za-z0-9._\-]{1,255}$")

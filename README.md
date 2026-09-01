@@ -21,12 +21,26 @@ Needs Python ≥ 3.10. On the machine that will host the server:
 
 ```bash
 git clone <this repo> teleop-data-server && cd teleop-data-server
+cp fleet.env.example fleet.env   # then edit: data dir, token, port, sync dest
+./start.sh                       # foreground run (creates .venv on first use)
+./start.sh service               # or: install + start the systemd service (sudo)
+./stop.sh                        # stop the service and any foreground runs
+./stop.sh --disable              # ...and don't start the service at boot anymore
+```
+
+Every setting lives in `fleet.env` (gitignored — it holds the token; keep it
+`chmod 600`). The installed service reads that same file, so changing any
+setting later is: edit `fleet.env`, then `sudo systemctl restart duo-fleet`.
+
+Or run uvicorn by hand:
+
+```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 export FLEET_DATA_DIR=$PWD/fleet_data     # db + scene/episode files (default ./fleet_data)
 export FLEET_TOKEN=change-me              # shared secret; unset = no auth (LAN only!)
-uvicorn fleet_server.app:app --host 0.0.0.0 --port 8080 --workers 1
+uvicorn fleet_server.app:app --host 0.0.0.0 --port 8099 --workers 1
 ```
 
 **`--workers 1` is required.** All coordination state is serialized inside one
@@ -35,7 +49,7 @@ collectors race-free. Multiple workers would each open their own state. One
 worker is far more than enough — the request rate is a few per minute per
 collector.
 
-Then open `http://<server>:8080/` for the dashboard and give collectors the
+Then open `http://<server>:8099/` for the dashboard and give collectors the
 URL + token.
 
 ### Data layout (`FLEET_DATA_DIR`)
@@ -45,12 +59,23 @@ fleet_data/
   fleet.sqlite3        # scenes / workers / episodes / collectors tables
   scenes/<scene_id>    # the scene USDA files, scene_id = file basename
   episodes/<uuid>.hdf5 # one file per labeled trajectory
+  assets/              # object assets (USD meshes) the scenes reference;
+                       # not read by the server, but backed up with the rest
 ```
 
 Back up by copying the whole directory (stop the server, or use
 `sqlite3 fleet.sqlite3 ".backup ..."` for the db while running). Episode files
 are immutable once committed; syncing `episodes/` to training storage is safe
 at any time.
+
+Or let the server do it: set `FLEET_SYNC_DEST=gs://bucket/prefix/` and it
+pushes the data dir there every `FLEET_SYNC_INTERVAL_S` (default 300) seconds —
+the db as a consistent snapshot (SQLite backup API, taken under the process
+lock), `scenes/`, `episodes/` and `assets/` via `gcloud storage rsync`
+(in-flight `.part-*` uploads excluded, nothing ever deleted at the
+destination). Needs a `gcloud`
+authenticated for the bucket in the service user's account; point
+`FLEET_GCLOUD` at the binary if it is not on PATH.
 
 ### Seeding scenes
 
@@ -63,7 +88,7 @@ python -m fleet_server.seed --data-dir $FLEET_DATA_DIR --scene-list ~/scenes/sce
 
 # Over HTTP from a collector machine (IsaacLab checkout):
 ./isaaclab.sh -p scripts/environments/teleoperation/sharpa_duo/fleet_push_scenes.py \
-    --fleet_server http://<server>:8080 --fleet_token change-me \
+    --fleet_server http://<server>:8099 --fleet_token change-me \
     --scene_list scripts/environments/teleoperation/sharpa_duo/scenes/scene_list.json --target 20
 ```
 
@@ -72,12 +97,15 @@ episode history. Adjust one scene later with:
 
 ```bash
 curl -X PATCH -H "X-Fleet-Token: $FLEET_TOKEN" -H "Content-Type: application/json" \
-    -d '{"target_successes": 40, "priority": 5}' http://<server>:8080/api/scenes/<scene_id>
+    -d '{"target_successes": 40, "priority": 5}' http://<server>:8099/api/scenes/<scene_id>
 ```
 
 (`{"retired": true}` hides a scene from suggestions without deleting its data.)
 
 ### Running as a service (systemd)
+
+`./start.sh service` generates and installs this unit (as `duo-fleet`),
+pointing `EnvironmentFile` at the repo's `fleet.env`:
 
 ```ini
 # /etc/systemd/system/duo-fleet.service
@@ -86,11 +114,10 @@ Description=Teleop Data Server
 After=network.target
 
 [Service]
-User=fleet
-WorkingDirectory=/opt/teleop-data-server
-Environment=FLEET_DATA_DIR=/opt/teleop-data-server/fleet_data
-Environment=FLEET_TOKEN=change-me
-ExecStart=/opt/teleop-data-server/.venv/bin/uvicorn fleet_server.app:app --host 0.0.0.0 --port 8080 --workers 1
+User=<you>
+WorkingDirectory=<repo>
+EnvironmentFile=<repo>/fleet.env
+ExecStart=<repo>/.venv/bin/uvicorn fleet_server.app:app --host ${FLEET_HOST} --port ${FLEET_PORT} --workers 1
 Restart=on-failure
 
 [Install]

@@ -1,5 +1,5 @@
-__pycache__/
-*.pyc
-fleet_data/
+fleet.env
 .venv/
-venv/
+__pycache__/
+fleet_data/
+nohup.out

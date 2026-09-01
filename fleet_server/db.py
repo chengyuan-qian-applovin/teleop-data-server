@@ -76,7 +76,10 @@ class Database:
         self.data_dir = os.path.abspath(data_dir)
         self.scenes_dir = os.path.join(self.data_dir, "scenes")
         self.episodes_dir = os.path.join(self.data_dir, "episodes")
-        for path in (self.data_dir, self.scenes_dir, self.episodes_dir):
+        # Object assets (meshes etc.) the scene files reference. The server
+        # never reads them; they live here so backups cover them.
+        self.assets_dir = os.path.join(self.data_dir, "assets")
+        for path in (self.data_dir, self.scenes_dir, self.episodes_dir, self.assets_dir):
             os.makedirs(path, exist_ok=True)
         self.default_target = default_target
         self._lock = threading.RLock()
@@ -92,6 +95,23 @@ class Database:
         """One serialized transaction: commits on success, rolls back on error."""
         with self._lock, self._conn:
             yield self._conn
+
+    def backup_db(self, dest_path: str) -> None:
+        """Write a consistent snapshot of the database to ``dest_path`` (atomic).
+
+        Uses SQLite's backup API inside the process lock, so the copy is a
+        clean point-in-time image even though the live db is in WAL mode.
+        """
+        tmp = f"{dest_path}.part"
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        with self._lock:
+            dest = sqlite3.connect(tmp)
+            try:
+                self._conn.backup(dest)
+            finally:
+                dest.close()
+        os.replace(tmp, dest_path)
 
     # -- paths ----------------------------------------------------------------
 
