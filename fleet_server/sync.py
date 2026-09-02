@@ -5,8 +5,8 @@ server pushes:
 
 - ``fleet.sqlite3`` — as a consistent snapshot taken with SQLite's backup API
   inside the database lock (the live WAL-mode file must never be copied raw),
-- ``scenes/``, ``episodes/`` and ``assets/`` — via ``gcloud storage rsync``,
-  skipping the ``.part-*`` temp files of uploads still in flight.
+- ``scenes/`` and ``episodes/`` — via ``gcloud storage rsync``, skipping the
+  ``.part-*`` temp files of uploads still in flight.
 
 Nothing is ever deleted at the destination, so a scene removed locally (or a
 whole restarted data dir) can only add to the bucket, never destroy history.
@@ -53,10 +53,6 @@ class Syncer:
         await self._run(
             self.gcloud, "storage", "rsync", "--recursive", f"--exclude={exclude}",
             self.db.episodes_dir, f"{self.dest}/episodes",
-        )
-        await self._run(
-            self.gcloud, "storage", "rsync", "--recursive", f"--exclude={exclude}",
-            self.db.assets_dir, f"{self.dest}/assets",
         )
         await self._run(self.gcloud, "storage", "cp", self._db_snapshot, f"{self.dest}/fleet.sqlite3")
 

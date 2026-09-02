@@ -21,7 +21,7 @@ Needs Python ≥ 3.10. On the machine that will host the server:
 
 ```bash
 git clone <this repo> teleop-data-server && cd teleop-data-server
-cp fleet.env.example fleet.env   # then edit: data dir, token, port, sync dest
+$EDITOR fleet.env                # create it — all settings, sample below
 ./start.sh                       # foreground run (creates .venv on first use)
 ./start.sh service               # or: install + start the systemd service (sudo)
 ./stop.sh                        # stop the service and any foreground runs
@@ -31,6 +31,19 @@ cp fleet.env.example fleet.env   # then edit: data dir, token, port, sync dest
 Every setting lives in `fleet.env` (gitignored — it holds the token; keep it
 `chmod 600`). The installed service reads that same file, so changing any
 setting later is: edit `fleet.env`, then `sudo systemctl restart duo-fleet`.
+A complete `fleet.env` (simple `KEY=value` lines — both bash and systemd read
+it, so no quotes or spaces):
+
+```bash
+FLEET_HOST=0.0.0.0
+FLEET_PORT=8080
+FLEET_DATA_DIR=/absolute/path/to/fleet_data   # fleet.sqlite3 + scenes/ + episodes/
+FLEET_TOKEN=change-me                         # X-Fleet-Token; empty = no auth (LAN only!)
+FLEET_DEFAULT_TARGET=20                       # for scenes created without a target
+FLEET_SYNC_DEST=                              # gs://bucket/prefix/; empty = no backup
+FLEET_SYNC_INTERVAL_S=300
+FLEET_GCLOUD=gcloud                           # path to gcloud if not on PATH
+```
 
 Or run uvicorn by hand:
 
@@ -57,45 +70,33 @@ URL + token.
 ```
 fleet_data/
   fleet.sqlite3        # scenes / workers / episodes / collectors tables
-  scenes/<scene_id>    # the scene USDA files, scene_id = file basename
+  scenes/<scene_id>    # self-contained scene packages, scene_id = file basename
   scenes/*.json        # loose JSON documents (e.g. scene_instruct.json),
                        # kept next to the scenes they describe
   episodes/<uuid>.hdf5 # one file per labeled trajectory
-  assets/...           # object assets (USD meshes) the scenes reference;
-                       # not read by the server, but served and backed up
 ```
 
-**File organization convention.** Scenes and assets live *only* in `scenes/`
-and `assets/` — flat scenes, arbitrarily nested assets, no symlinks. JSON
-documents that describe the scene set (task metadata etc.) live in `scenes/`
-too, next to the scene files; `/api/docs` serves them from there and the
-scenes backup rsync carries them automatically. Every
-asset reference inside a scene USDA is written relative to the scene file as
-`../assets/<asset path>`, e.g.
+**File organization convention.** Every scene is one **self-contained
+`.usdz` package**: composition flattened into a single layer, all geometry
+and textures inside the package, no references to any other file. (The one
+exception is `OmniPBR.mdl`, an NVIDIA material shipped with Omniverse/Isaac
+that resolves from the runtime's own search paths.) A collector therefore
+needs exactly one download per scene — there is no separate asset tree, on
+the server or on collectors. JSON documents that describe the scene set
+(task metadata etc.) live in `scenes/` next to the scene files; `/api/docs`
+serves them from there and the scenes backup rsync carries them.
 
-```
-prepend payload = @../assets/02_mesh/18_reorg_usd/usd/TACO/hammer_02.usd@
-```
-
-so references resolve in place inside `fleet_data`, and a collector that
-downloads scenes and assets into the same two sibling directories
-(`scenes/` next to `assets/`, asset paths taken verbatim from
-`GET /api/assets`) gets working references with no extra setup. Scenes
-generated with a different layout must have their reference prefixes
-rewritten to `../assets/...` before seeding.
-
-There is no scene→asset table in the database: `GET /api/scenes/{id}/assets`
-(and the dashboard's per-scene file dropdown) derive the asset list by parsing
-the stored scene file's `@...@` references at request time, so the answer can
-never drift from the file a client actually downloads. Two limitations follow:
-
-- Only references written literally in the scene's own text are found. An
-  asset that internally references *other* files would not be listed — the
-  current asset set is self-contained (textures embedded in each `.usd`),
-  but that is a property of the assets, not something the server checks.
-- Scenes must be text USDA. A binary `.usdc` scene would not parse; seeding
-  those would require crate-aware parsing (e.g. `usd-core`) or an explicit
-  relations table populated at seed time.
+Scene sets from the generator are *not* self-contained — they reference a
+mesh/texture tree (`02_mesh/...`), and some of those assets are themselves
+wrappers pulling in further files (`configuration/*.usd`, texture PNGs).
+Before seeding a new set, convert it with `usd-core`: fetch the full
+dependency closure (`pxr.UsdUtils.ComputeAllDependencies`, iterating until
+nothing but runtime `.mdl` refs is unresolved), flatten each scene
+(`UsdStage.Flatten`), package it (`UsdUtils.CreateNewUsdzPackage` on the
+flattened layer), and verify each package composes the same mesh/point
+counts as its source scene (traverse with instance proxies — articulated
+assets hide their meshes in instances). A scene whose asset geometry is
+missing upstream composes to zero meshes and must be excluded.
 
 Back up by copying the whole directory (stop the server, or use
 `sqlite3 fleet.sqlite3 ".backup ..."` for the db while running). Episode files
@@ -105,7 +106,7 @@ at any time.
 Or let the server do it: set `FLEET_SYNC_DEST=gs://bucket/prefix/` and it
 pushes the data dir there every `FLEET_SYNC_INTERVAL_S` (default 300) seconds —
 the db as a consistent snapshot (SQLite backup API, taken under the process
-lock), `scenes/`, `episodes/` and `assets/` via `gcloud storage rsync`
+lock), `scenes/` and `episodes/` via `gcloud storage rsync`
 (in-flight `.part-*` uploads excluded, nothing ever deleted at the
 destination). Needs a `gcloud`
 authenticated for the bucket in the service user's account; point
@@ -165,7 +166,7 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 
 | Method & path | Purpose |
 |---|---|
-| `GET /` | Live HTML dashboard (no token, read-only, refreshes every 5 s). Each scene row expands to show where its scene/asset files live on the server's disk. |
+| `GET /` | Live HTML dashboard (no token, read-only, refreshes every 5 s). Each scene row expands to show where its scene file lives on the server's disk. |
 | `GET /api/health` | Liveness probe. |
 | `POST /api/checkin` `{collector_id}` | Startup sync: registers the collector, clears its stale presence, returns the full status snapshot. |
 | `POST /api/heartbeat` `{collector_id, scene_id?}` | Keeps the collector (and its scene presence) marked live; presence goes stale after 120 s of silence. |
@@ -176,12 +177,9 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 | `GET /api/scenes` | All scene rows with progress. |
 | `PUT /api/scenes/{id}/file?target_successes=&priority=&task_description=` | Upload/replace a scene file (raw body) and upsert its row. |
 | `GET /api/scenes/{id}/file` | Download a scene file. |
-| `GET /api/scenes/{id}/assets` | The assets that scene needs (paths for `GET /api/assets/{path}`, size, sha256; missing files flagged). |
 | `PATCH /api/scenes/{id}` | Change `target_successes` / `priority` / `task_description` / `retired`. |
 | `GET /api/docs` | The loose JSON documents in `scenes/` (e.g. `scene_instruct.json`). |
 | `GET /api/docs/{name}` | Download one of those documents. |
-| `GET /api/assets` | All asset files (path relative to `assets/`, size, sha256) — clients mirror the tree from this. |
-| `GET /api/assets/{path}` | Download one asset file (nested paths allowed, confined to `assets/`). |
 | `PUT /api/episodes/{uuid}/file` | Upload one trajectory HDF5 (raw body; atomic, idempotent). |
 | `POST /api/episodes` `{episode_uuid, scene_id, collector_id, success, ...}` | Commit the episode's metadata. 409 until its file is uploaded; UPSERT by uuid, so retries are safe. Returns the scene's progress. |
 | `GET /api/episodes?scene_id=&limit=` | Recent episode rows. |

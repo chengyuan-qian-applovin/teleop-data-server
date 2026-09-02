@@ -76,10 +76,7 @@ class Database:
         self.data_dir = os.path.abspath(data_dir)
         self.scenes_dir = os.path.join(self.data_dir, "scenes")
         self.episodes_dir = os.path.join(self.data_dir, "episodes")
-        # Object assets (meshes etc.) the scene files reference. The server
-        # never reads them; they live here so backups cover them.
-        self.assets_dir = os.path.join(self.data_dir, "assets")
-        for path in (self.data_dir, self.scenes_dir, self.episodes_dir, self.assets_dir):
+        for path in (self.data_dir, self.scenes_dir, self.episodes_dir):
             os.makedirs(path, exist_ok=True)
         self.default_target = default_target
         self._lock = threading.RLock()

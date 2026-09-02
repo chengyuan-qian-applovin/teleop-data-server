@@ -7,7 +7,7 @@ to push scenes over HTTP from a collector machine instead, use the
 
 Examples:
 
-    # every .usda under a directory, 20 successes each
+    # every .usda/.usd/.usdz under a directory, 20 successes each
     python -m fleet_server.seed --data-dir ./fleet_data --scene-dir ~/scenes --target 20
 
     # a scene_list.json (plain paths, or {"scenes": [...]} with optional
@@ -31,7 +31,7 @@ def iter_entries(args: argparse.Namespace) -> list[tuple[str, str | None]]:
     entries: list[tuple[str, str | None]] = []
     if args.scene_dir:
         for root, _dirs, files in os.walk(args.scene_dir):
-            entries += [(os.path.join(root, f), None) for f in sorted(files) if f.endswith((".usda", ".usd"))]
+            entries += [(os.path.join(root, f), None) for f in sorted(files) if f.endswith((".usda", ".usd", ".usdz"))]
     if args.scene_list:
         base = os.path.dirname(os.path.abspath(args.scene_list))
         with open(args.scene_list) as f:

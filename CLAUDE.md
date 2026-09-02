@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-process FastAPI + SQLite server coordinating multi-headset teleop data collection: scenes to record, live collector presence, idempotent episode intake, asset distribution, and periodic backup to GCS. One instance runs per fleet; collectors (IsaacLab `sharpa_duo` scripts) talk to it over HTTP with a shared token.
+A single-process FastAPI + SQLite server coordinating multi-headset teleop data collection: scenes to record, live collector presence, idempotent episode intake, and periodic backup to GCS. One instance runs per fleet; collectors (IsaacLab `sharpa_duo` scripts) talk to it over HTTP with a shared token.
 
 ## Commands
 
-All runtime settings live in `fleet.env` (gitignored — holds the token; copy from `fleet.env.example`). Both `start.sh` and the systemd unit read it; changing a setting later is: edit `fleet.env`, then `sudo systemctl restart duo-fleet`.
+All runtime settings live in `fleet.env` (gitignored — holds the token; sample in README Setup). Both `start.sh` and the systemd unit read it; changing a setting later is: edit `fleet.env`, then `sudo systemctl restart duo-fleet`.
 
 ```bash
 ./start.sh                # foreground run (creates .venv + installs deps on first use)
@@ -39,16 +39,16 @@ Three modules under `fleet_server/`:
 Invariants the design depends on — do not break these:
 
 - **Exactly one uvicorn worker** (`--workers 1`). All coordination correctness comes from serializing state in one process; a second worker means a second lock and a second connection.
-- **No stored counters or relations.** Progress is `COUNT(*)` over `episodes`; a scene's asset list is derived by parsing the stored scene file's `@...@` references at request time (`_scene_refs` in `app.py`). Derive inside the critical section rather than caching in a column — there is deliberately no scene→asset table.
+- **No stored counters.** Progress is `COUNT(*)` over `episodes`, computed inside the critical section — never cached in a column.
 - **Episodes are idempotent by `episode_uuid`** (collector-generated; file name and db key). Upload is atomic (temp file + rename), and metadata commit 409s until the file exists. Retries must never be able to duplicate or half-commit.
 - **Presence is never a lock.** `workers` rows just describe who is where; stale rows (no heartbeat for `WORKER_TTL_S` = 120s) drop out of view. Nothing may ever reserve a scene.
 - **The live db file is never copied raw.** Backups go through `Database.backup_db()` (SQLite backup API under the lock). The sync is add-only: nothing is ever deleted at the GCS destination.
 
 ## Data layout convention
 
-Under `FLEET_DATA_DIR`: `fleet.sqlite3`, flat `scenes/<scene_id>` (scene_id = file basename), `episodes/<uuid>.hdf5`, and nested `assets/...`. Loose `*.json` docs describing the scene set (e.g. `scene_instruct.json`) live in `scenes/` next to the scene files — `/api/docs` serves them from there and the scenes rsync backs them up; the seeder ignores them (it only takes `.usda`/`.usd`). Scene USDA files must reference assets as `../assets/<path>` — no symlinks, no other locations. Scene sets generated elsewhere use `../../../../02_mesh/...` prefixes; rewrite them (`sed 's|@\.\./\.\./\.\./\.\./|@../assets/|g'`) before seeding. `GET /api/assets` paths are exactly the on-disk layout a collector must mirror next to its own `scenes/` dir.
+Under `FLEET_DATA_DIR`: `fleet.sqlite3`, flat `scenes/<scene_id>` (scene_id = file basename), and `episodes/<uuid>.hdf5`. Every scene is a **self-contained `.usdz` package** — flattened composition, geometry and textures inside, no external references except the runtime-resolved `OmniPBR.mdl`. There is no asset tree anywhere. Loose `*.json` docs describing the scene set (e.g. `scene_instruct.json`) live in `scenes/` next to the scene files — `/api/docs` serves them from there and the scenes rsync backs them up; the seeder ignores them (it only takes `.usda`/`.usd`/`.usdz`).
 
-Scenes must be text `.usda` (the reference parser and the dashboard dropdown depend on it); binary `.usdc` would need crate parsing.
+Scene sets from the generator are not self-contained; the README's "File organization convention" section documents the usd-core conversion pipeline (dependency closure → flatten → usdz → verify mesh/point counts, traversing with instance proxies). Scenes whose upstream asset geometry is missing compose to zero meshes — exclude them.
 
 ## When changing the API
 

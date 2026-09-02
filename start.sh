@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
-[ -f fleet.env ] || { echo "fleet.env not found — copy fleet.env.example to fleet.env and edit it" >&2; exit 1; }
+[ -f fleet.env ] || { echo "fleet.env not found — create it next to start.sh (sample in README Setup)" >&2; exit 1; }
 set -a
 source fleet.env
 set +a
