@@ -270,6 +270,51 @@ def download_episode(episode_uuid: str) -> FileResponse:
     return FileResponse(path, media_type="application/octet-stream", filename=f"{episode_uuid}.hdf5")
 
 
+# -- assets --------------------------------------------------------------------------
+
+# sha256 of asset files, keyed by (rel path, size, mtime_ns) so an edited or
+# replaced file re-hashes and an unchanged one never does. Assets are large
+# and change rarely; without this every /api/assets call would re-read all
+# of them.
+_asset_sha_cache: dict[tuple[str, int, int], str] = {}
+
+
+@app.get("/api/assets", dependencies=[Depends(require_token)])
+def list_assets() -> dict:
+    """Every asset file (path relative to assets/, size, sha256).
+
+    Clients mirror the tree from this: download whatever is missing locally
+    or has a different sha, into the same relative layout — scene files
+    reference assets by relative path, so the layout is the contract.
+    """
+    base = db.assets_dir
+    assets = []
+    for root, _dirs, files in os.walk(base):
+        for name in files:
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, base).replace(os.sep, "/")
+            st = os.stat(full)
+            key = (rel, st.st_size, st.st_mtime_ns)
+            sha = _asset_sha_cache.get(key)
+            if sha is None:
+                digest = hashlib.sha256()
+                with open(full, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        digest.update(chunk)
+                sha = _asset_sha_cache[key] = digest.hexdigest()
+            assets.append({"path": rel, "size_bytes": st.st_size, "sha256": sha})
+    return {"assets": sorted(assets, key=lambda a: a["path"])}
+
+
+@app.get("/api/assets/{asset_path:path}", dependencies=[Depends(require_token)])
+def download_asset(asset_path: str) -> FileResponse:
+    base = os.path.realpath(db.assets_dir)
+    full = os.path.realpath(os.path.join(base, asset_path))
+    if not (full.startswith(base + os.sep) and os.path.isfile(full)):
+        raise HTTPException(status_code=404, detail=f"no such asset {asset_path!r}")
+    return FileResponse(full, media_type="application/octet-stream", filename=os.path.basename(full))
+
+
 # -- dashboard -----------------------------------------------------------------------
 
 
