@@ -279,6 +279,35 @@ def download_episode(episode_uuid: str) -> FileResponse:
 _asset_sha_cache: dict[tuple[str, int, int], str] = {}
 
 
+def _asset_sha256(rel: str, full: str, st: os.stat_result) -> str:
+    key = (rel, st.st_size, st.st_mtime_ns)
+    sha = _asset_sha_cache.get(key)
+    if sha is None:
+        digest = hashlib.sha256()
+        with open(full, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        sha = _asset_sha_cache[key] = digest.hexdigest()
+    return sha
+
+
+def _scene_refs(scene_id: str) -> list[str]:
+    """Absolute paths of every file the scene's USDA references, deduped, in file order."""
+    try:
+        with open(db.scene_path(scene_id), encoding="utf-8", errors="replace") as f:
+            refs = re.findall(r"@([^@\n]+)@", f.read())
+    except OSError:
+        return []
+    out: list[str] = []
+    seen = set()
+    for ref in refs:
+        p = os.path.normpath(os.path.join(db.scenes_dir, ref))
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 @app.get("/api/assets", dependencies=[Depends(require_token)])
 def list_assets() -> dict:
     """Every asset file (path relative to assets/, size, sha256).
@@ -294,16 +323,33 @@ def list_assets() -> dict:
             full = os.path.join(root, name)
             rel = os.path.relpath(full, base).replace(os.sep, "/")
             st = os.stat(full)
-            key = (rel, st.st_size, st.st_mtime_ns)
-            sha = _asset_sha_cache.get(key)
-            if sha is None:
-                digest = hashlib.sha256()
-                with open(full, "rb") as f:
-                    for chunk in iter(lambda: f.read(1 << 20), b""):
-                        digest.update(chunk)
-                sha = _asset_sha_cache[key] = digest.hexdigest()
-            assets.append({"path": rel, "size_bytes": st.st_size, "sha256": sha})
+            assets.append({"path": rel, "size_bytes": st.st_size, "sha256": _asset_sha256(rel, full, st)})
     return {"assets": sorted(assets, key=lambda a: a["path"])}
+
+
+@app.get("/api/scenes/{scene_id}/assets", dependencies=[Depends(require_token)])
+def scene_assets(scene_id: str) -> dict:
+    """The assets one scene needs: exactly what a client must have to load it.
+
+    Each entry's ``path`` plugs straight into ``GET /api/assets/{path}`` and is
+    the relative location to store it at (next to a ``scenes/`` dir). Entries
+    with ``"missing": true`` are referenced by the scene but absent on the
+    server; references outside ``assets/`` are reported the same way.
+    """
+    check_scene_id(scene_id)
+    if not os.path.exists(db.scene_path(scene_id)):
+        raise HTTPException(status_code=404, detail=f"no file stored for scene {scene_id!r}")
+    base = os.path.realpath(db.assets_dir)
+    assets = []
+    for p in _scene_refs(scene_id):
+        full = os.path.realpath(p)
+        rel = os.path.relpath(full, base).replace(os.sep, "/")
+        if full.startswith(base + os.sep) and os.path.isfile(full):
+            st = os.stat(full)
+            assets.append({"path": rel, "size_bytes": st.st_size, "sha256": _asset_sha256(rel, full, st), "missing": False})
+        else:
+            assets.append({"path": rel, "missing": True})
+    return {"scene_id": scene_id, "assets": assets}
 
 
 @app.get("/api/assets/{asset_path:path}", dependencies=[Depends(require_token)])
@@ -347,17 +393,7 @@ def _scene_files(scene_id: str) -> list[tuple[str, str, bool]]:
     """(kind, absolute path, exists) for a scene's file and each asset it references."""
     path = db.scene_path(scene_id)
     rows = [("scene", path, os.path.exists(path))]
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            refs = re.findall(r"@([^@\n]+)@", f.read())
-    except OSError:
-        return rows
-    seen = set()
-    for ref in refs:
-        p = os.path.normpath(os.path.join(db.scenes_dir, ref))
-        if p not in seen:
-            seen.add(p)
-            rows.append(("asset", p, os.path.exists(p)))
+    rows += [("asset", p, os.path.isfile(p)) for p in _scene_refs(scene_id)]
     return rows
 
 

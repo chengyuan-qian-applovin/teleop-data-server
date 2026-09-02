@@ -159,6 +159,7 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 | `GET /api/scenes` | All scene rows with progress. |
 | `PUT /api/scenes/{id}/file?target_successes=&priority=&task_description=` | Upload/replace a scene file (raw body) and upsert its row. |
 | `GET /api/scenes/{id}/file` | Download a scene file. |
+| `GET /api/scenes/{id}/assets` | The assets that scene needs (paths for `GET /api/assets/{path}`, size, sha256; missing files flagged). |
 | `PATCH /api/scenes/{id}` | Change `target_successes` / `priority` / `task_description` / `retired`. |
 | `GET /api/docs` | The loose JSON documents at the data dir root (e.g. `scene_instruct.json`). |
 | `GET /api/docs/{name}` | Download one of those documents. |
