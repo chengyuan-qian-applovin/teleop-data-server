@@ -80,6 +80,19 @@ downloads scenes and assets into the same two sibling directories
 generated with a different layout must have their reference prefixes
 rewritten to `../assets/...` before seeding.
 
+There is no scene→asset table in the database: `GET /api/scenes/{id}/assets`
+(and the dashboard's per-scene file dropdown) derive the asset list by parsing
+the stored scene file's `@...@` references at request time, so the answer can
+never drift from the file a client actually downloads. Two limitations follow:
+
+- Only references written literally in the scene's own text are found. An
+  asset that internally references *other* files would not be listed — the
+  current asset set is self-contained (textures embedded in each `.usd`),
+  but that is a property of the assets, not something the server checks.
+- Scenes must be text USDA. A binary `.usdc` scene would not parse; seeding
+  those would require crate-aware parsing (e.g. `usd-core`) or an explicit
+  relations table populated at seed time.
+
 Back up by copying the whole directory (stop the server, or use
 `sqlite3 fleet.sqlite3 ".backup ..."` for the db while running). Episode files
 are immutable once committed; syncing `episodes/` to training storage is safe
