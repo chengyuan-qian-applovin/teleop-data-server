@@ -315,6 +315,31 @@ def download_asset(asset_path: str) -> FileResponse:
     return FileResponse(full, media_type="application/octet-stream", filename=os.path.basename(full))
 
 
+# -- docs ----------------------------------------------------------------------------
+
+# Loose JSON documents at the data dir root (e.g. scene_instruct.json with
+# per-scene task metadata). Placed there by hand; served read-only.
+_DOC_NAME_RE = re.compile(r"^[A-Za-z0-9._\-]{1,255}\.json$")
+
+
+@app.get("/api/docs", dependencies=[Depends(require_token)])
+def list_docs() -> dict:
+    docs = [
+        {"name": f, "size_bytes": os.path.getsize(os.path.join(db.data_dir, f))}
+        for f in sorted(os.listdir(db.data_dir))
+        if f.endswith(".json") and os.path.isfile(os.path.join(db.data_dir, f))
+    ]
+    return {"docs": docs}
+
+
+@app.get("/api/docs/{name}", dependencies=[Depends(require_token)])
+def download_doc(name: str) -> FileResponse:
+    path = os.path.join(db.data_dir, name)
+    if not (_DOC_NAME_RE.match(name) and os.path.isfile(path)):
+        raise HTTPException(status_code=404, detail=f"no such doc {name!r}")
+    return FileResponse(path, media_type="application/json", filename=name)
+
+
 # -- dashboard -----------------------------------------------------------------------
 
 
