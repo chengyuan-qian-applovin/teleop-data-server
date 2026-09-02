@@ -343,6 +343,24 @@ def download_doc(name: str) -> FileResponse:
 # -- dashboard -----------------------------------------------------------------------
 
 
+def _scene_files(scene_id: str) -> list[tuple[str, str, bool]]:
+    """(kind, absolute path, exists) for a scene's file and each asset it references."""
+    path = db.scene_path(scene_id)
+    rows = [("scene", path, os.path.exists(path))]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            refs = re.findall(r"@([^@\n]+)@", f.read())
+    except OSError:
+        return rows
+    seen = set()
+    for ref in refs:
+        p = os.path.normpath(os.path.join(db.scenes_dir, ref))
+        if p not in seen:
+            seen.add(p)
+            rows.append(("asset", p, os.path.exists(p)))
+    return rows
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
     snap = db.snapshot()
@@ -361,8 +379,15 @@ def dashboard() -> str:
         workers = ", ".join(e(w) for w in s["active_workers"]) or "&mdash;"
         cls = ' class="retired"' if s["retired"] else ""
         done = " done" if s["successes"] >= s["target_successes"] else ""
+        file_items = []
+        for kind, path, ok in _scene_files(s["scene_id"]):
+            tail = "" if ok else ' <span class="miss">missing!</span>'
+            file_items.append(f'<li><span class="kind">{kind}</span>{e(path)}{tail}</li>')
+        files = "".join(file_items)
         scene_rows.append(
-            f'<tr{cls}><td class="name{done}">{e(s["scene_id"])}</td>'
+            f'<tr{cls}><td class="name{done}">'
+            f'<details class="files" data-scene="{e(s["scene_id"])}">'
+            f'<summary>{e(s["scene_id"])}</summary><ul>{files}</ul></details></td>'
             f'<td class="prog">{bar(s["successes"], s["target_successes"])}</td>'
             f'<td>{s["failures"]}</td><td>{s["priority"]}</td><td>{workers}</td>'
             f'<td class="desc">{e(s["task_description"] or "")}</td></tr>'
@@ -389,6 +414,12 @@ th {{ background: #eef0f4; }} .name {{ font-family: ui-monospace, monospace; fon
 border-radius: 3px; margin-right: .5rem; vertical-align: middle; }} .bar div {{ height: 100%; border-radius: 3px; }}
 .on {{ color: #22a06b; font-weight: 600; }} .off {{ color: #b45309; }}
 .totals {{ color: #5c6675; margin-bottom: 1rem; }}
+details.files summary {{ cursor: pointer; }}
+details.files ul {{ list-style: none; margin: .35rem 0 .25rem; padding: 0 0 0 1rem; }}
+details.files li {{ font-size: .75rem; color: #5c6675; white-space: nowrap; }}
+details.files .kind {{ display: inline-block; min-width: 3.2em; color: #8a94a3; text-transform: uppercase;
+font-size: .65rem; letter-spacing: .04em; }}
+details.files .miss {{ color: #b0413e; font-weight: 600; }}
 </style></head><body>
 <h1>Duo Fleet — collection status</h1>
 <div class="totals">{t["successes_toward_target"]}/{t["target_successes"]} successes toward target across
@@ -400,4 +431,18 @@ border-radius: 3px; margin-right: .5rem; vertical-align: middle; }} .bar div {{ 
 <h2>Collectors</h2>
 <table><tr><th>Collector</th><th>State</th><th>Working on</th><th>Episodes reported</th></tr>
 {"".join(collector_rows) or '<tr><td colspan="4">No collectors have checked in yet.</td></tr>'}</table>
+<script>
+// The page reloads every 5s (meta refresh); keep expanded scene rows expanded.
+try {{
+  const key = "duoFleetOpenScenes";
+  const open = new Set(JSON.parse(sessionStorage.getItem(key) || "[]"));
+  document.querySelectorAll("details.files").forEach((d) => {{
+    if (open.has(d.dataset.scene)) d.open = true;
+    d.addEventListener("toggle", () => {{
+      if (d.open) open.add(d.dataset.scene); else open.delete(d.dataset.scene);
+      sessionStorage.setItem(key, JSON.stringify([...open]));
+    }});
+  }});
+}} catch (err) {{ /* storage unavailable: dropdowns still work, just not sticky */ }}
+</script>
 </body></html>"""

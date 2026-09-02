@@ -59,9 +59,26 @@ fleet_data/
   fleet.sqlite3        # scenes / workers / episodes / collectors tables
   scenes/<scene_id>    # the scene USDA files, scene_id = file basename
   episodes/<uuid>.hdf5 # one file per labeled trajectory
-  assets/              # object assets (USD meshes) the scenes reference;
-                       # not read by the server, but backed up with the rest
+  assets/...           # object assets (USD meshes) the scenes reference;
+                       # not read by the server, but served and backed up
+  *.json               # loose documents (e.g. scene_instruct.json)
 ```
+
+**File organization convention.** Scenes and assets live *only* in `scenes/`
+and `assets/` — flat scenes, arbitrarily nested assets, no symlinks. Every
+asset reference inside a scene USDA is written relative to the scene file as
+`../assets/<asset path>`, e.g.
+
+```
+prepend payload = @../assets/02_mesh/18_reorg_usd/usd/TACO/hammer_02.usd@
+```
+
+so references resolve in place inside `fleet_data`, and a collector that
+downloads scenes and assets into the same two sibling directories
+(`scenes/` next to `assets/`, asset paths taken verbatim from
+`GET /api/assets`) gets working references with no extra setup. Scenes
+generated with a different layout must have their reference prefixes
+rewritten to `../assets/...` before seeding.
 
 Back up by copying the whole directory (stop the server, or use
 `sqlite3 fleet.sqlite3 ".backup ..."` for the db while running). Episode files
@@ -131,7 +148,7 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 
 | Method & path | Purpose |
 |---|---|
-| `GET /` | Live HTML dashboard (no token, read-only, refreshes every 5 s). |
+| `GET /` | Live HTML dashboard (no token, read-only, refreshes every 5 s). Each scene row expands to show where its scene/asset files live on the server's disk. |
 | `GET /api/health` | Liveness probe. |
 | `POST /api/checkin` `{collector_id}` | Startup sync: registers the collector, clears its stale presence, returns the full status snapshot. |
 | `POST /api/heartbeat` `{collector_id, scene_id?}` | Keeps the collector (and its scene presence) marked live; presence goes stale after 120 s of silence. |
