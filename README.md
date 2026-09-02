@@ -58,14 +58,18 @@ URL + token.
 fleet_data/
   fleet.sqlite3        # scenes / workers / episodes / collectors tables
   scenes/<scene_id>    # the scene USDA files, scene_id = file basename
+  scenes/*.json        # loose JSON documents (e.g. scene_instruct.json),
+                       # kept next to the scenes they describe
   episodes/<uuid>.hdf5 # one file per labeled trajectory
   assets/...           # object assets (USD meshes) the scenes reference;
                        # not read by the server, but served and backed up
-  *.json               # loose documents (e.g. scene_instruct.json)
 ```
 
 **File organization convention.** Scenes and assets live *only* in `scenes/`
-and `assets/` — flat scenes, arbitrarily nested assets, no symlinks. Every
+and `assets/` — flat scenes, arbitrarily nested assets, no symlinks. JSON
+documents that describe the scene set (task metadata etc.) live in `scenes/`
+too, next to the scene files; `/api/docs` serves them from there and the
+scenes backup rsync carries them automatically. Every
 asset reference inside a scene USDA is written relative to the scene file as
 `../assets/<asset path>`, e.g.
 
@@ -174,7 +178,7 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 | `GET /api/scenes/{id}/file` | Download a scene file. |
 | `GET /api/scenes/{id}/assets` | The assets that scene needs (paths for `GET /api/assets/{path}`, size, sha256; missing files flagged). |
 | `PATCH /api/scenes/{id}` | Change `target_successes` / `priority` / `task_description` / `retired`. |
-| `GET /api/docs` | The loose JSON documents at the data dir root (e.g. `scene_instruct.json`). |
+| `GET /api/docs` | The loose JSON documents in `scenes/` (e.g. `scene_instruct.json`). |
 | `GET /api/docs/{name}` | Download one of those documents. |
 | `GET /api/assets` | All asset files (path relative to `assets/`, size, sha256) — clients mirror the tree from this. |
 | `GET /api/assets/{path}` | Download one asset file (nested paths allowed, confined to `assets/`). |

@@ -59,12 +59,6 @@ class Syncer:
             self.db.assets_dir, f"{self.dest}/assets",
         )
         await self._run(self.gcloud, "storage", "cp", self._db_snapshot, f"{self.dest}/fleet.sqlite3")
-        # Loose documents at the data dir root (e.g. scene_instruct.json).
-        docs = sorted(
-            os.path.join(self.db.data_dir, f) for f in os.listdir(self.db.data_dir) if f.endswith(".json")
-        )
-        if docs:
-            await self._run(self.gcloud, "storage", "cp", *docs, f"{self.dest}/")
 
     async def run_forever(self) -> None:
         log.info("[sync] %s -> %s every %.0fs", self.db.data_dir, self.dest, self.interval_s)
