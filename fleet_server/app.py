@@ -194,6 +194,7 @@ class ScenePatch(BaseModel):
     priority: int | None = None
     task_description: str | None = None
     retired: bool | None = None
+    difficulty: str | None = None
 
 
 @app.patch("/api/scenes/{scene_id}", dependencies=[Depends(require_token)])
@@ -202,6 +203,8 @@ def patch_scene(scene_id: str, body: ScenePatch) -> dict:
     fields = body.model_dump()
     if fields.get("retired") is not None:
         fields["retired"] = int(fields["retired"])
+    if fields.get("difficulty") is not None:
+        fields["difficulty"] = fields["difficulty"].strip()[:32]
     scene = db.patch_scene(scene_id, fields)
     if scene is None:
         raise HTTPException(status_code=404, detail=f"unknown scene {scene_id!r}")
@@ -321,12 +324,21 @@ def dashboard() -> str:
         path = db.scene_path(s["scene_id"])
         tail = "" if os.path.exists(path) else ' <span class="miss">missing!</span>'
         files = f'<li><span class="kind">scene</span>{e(path)}{tail}</li>'
+        diff = (s.get("difficulty") or "").strip()
+        levels = ["", "easy", "medium", "hard"]
+        if diff and diff not in levels:
+            levels.append(diff)
+        options = "".join(
+            f'<option value="{e(o)}"{" selected" if o == diff else ""}>{e(o) or "&mdash;"}</option>' for o in levels
+        )
+        diff_cls = diff if diff in ("easy", "medium", "hard") else "none"
+        diff_cell = f'<select class="diff diff-{diff_cls}" data-scene="{e(s["scene_id"])}">{options}</select>'
         scene_rows.append(
             f'<tr{cls}><td class="name{done}">'
             f'<details class="files" data-scene="{e(s["scene_id"])}">'
             f'<summary>{e(s["scene_id"])}</summary><ul>{files}</ul></details></td>'
             f'<td class="prog">{bar(s["successes"], s["target_successes"])}</td>'
-            f'<td>{s["failures"]}</td><td>{s["priority"]}</td><td>{workers}</td>'
+            f'<td>{s["failures"]}</td><td>{s["priority"]}</td><td>{diff_cell}</td><td>{workers}</td>'
             f'<td class="desc">{e(s["task_description"] or "")}</td></tr>'
         )
     collector_rows = []
@@ -340,7 +352,7 @@ def dashboard() -> str:
         )
     t = snap["totals"]
     return f"""<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="refresh" content="5"><title>Duo Fleet</title><style>
+<title>Duo Fleet</title><style>
 body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f6f7f9; color: #1c2430; }}
 h1 {{ font-size: 1.4rem; }} h2 {{ font-size: 1.1rem; margin-top: 2rem; }}
 table {{ border-collapse: collapse; background: #fff; width: 100%; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
@@ -357,19 +369,28 @@ details.files li {{ font-size: .75rem; color: #5c6675; white-space: nowrap; }}
 details.files .kind {{ display: inline-block; min-width: 3.2em; color: #8a94a3; text-transform: uppercase;
 font-size: .65rem; letter-spacing: .04em; }}
 details.files .miss {{ color: #b0413e; font-weight: 600; }}
+select.diff {{ border: 1px solid #d5dae2; border-radius: 4px; background: #fff; font-size: .85rem;
+padding: .05rem .2rem; cursor: pointer; }}
+.diff-easy {{ color: #22a06b; }} .diff-medium {{ color: #b45309; }} .diff-hard {{ color: #b0413e; }}
+.diff-none {{ color: #8a94a3; }}
 </style></head><body>
 <h1>Duo Fleet — collection status</h1>
 <div class="totals">{t["successes_toward_target"]}/{t["target_successes"]} successes toward target across
 {t["scenes"]} scenes &middot; {t["episodes"]} episodes stored &middot; workers considered live for
 {int(WORKER_TTL_S)}s &middot; auto-refreshes every 5s</div>
 <h2>Scenes</h2>
-<table><tr><th>Scene</th><th>Successes</th><th>Failures</th><th>Priority</th><th>Working now</th><th>Task</th></tr>
-{"".join(scene_rows) or '<tr><td colspan="6">No scenes seeded yet.</td></tr>'}</table>
+<table><tr><th>Scene</th><th>Successes</th><th>Failures</th><th>Priority</th><th>Difficulty</th><th>Working now</th><th>Task</th></tr>
+{"".join(scene_rows) or '<tr><td colspan="7">No scenes seeded yet.</td></tr>'}</table>
 <h2>Collectors</h2>
 <table><tr><th>Collector</th><th>State</th><th>Working on</th><th>Episodes reported</th></tr>
 {"".join(collector_rows) or '<tr><td colspan="4">No collectors have checked in yet.</td></tr>'}</table>
 <script>
-// The page reloads every 5s (meta refresh); keep expanded scene rows expanded.
+// Auto-refresh every 5s via a cancellable timer (paused while editing difficulty).
+let reloadTimer = setTimeout(() => location.reload(), 5000);
+const pauseReload = () => clearTimeout(reloadTimer);
+const resumeReload = () => {{ clearTimeout(reloadTimer); reloadTimer = setTimeout(() => location.reload(), 5000); }};
+
+// Keep expanded scene rows expanded across reloads.
 try {{
   const key = "duoFleetOpenScenes";
   const open = new Set(JSON.parse(sessionStorage.getItem(key) || "[]"));
@@ -381,5 +402,39 @@ try {{
     }});
   }});
 }} catch (err) {{ /* storage unavailable: dropdowns still work, just not sticky */ }}
+
+// Difficulty editing: PATCH /api/scenes/<id> with the fleet token
+// (asked for once, kept in localStorage; cleared and re-asked on 401).
+async function saveDifficulty(sceneId, value) {{
+  let token = "";
+  try {{ token = localStorage.getItem("fleetToken") || ""; }} catch (e) {{}}
+  for (let attempt = 0; attempt < 2; attempt++) {{
+    if (!token) token = window.prompt("Fleet token (X-Fleet-Token) to save changes:") || "";
+    if (!token) return false;
+    const res = await fetch(`/api/scenes/${{encodeURIComponent(sceneId)}}`, {{
+      method: "PATCH",
+      headers: {{ "Content-Type": "application/json", "X-Fleet-Token": token }},
+      body: JSON.stringify({{ difficulty: value }}),
+    }});
+    if (res.ok) {{
+      try {{ localStorage.setItem("fleetToken", token); }} catch (e) {{}}
+      return true;
+    }}
+    if (res.status === 401) {{ token = ""; try {{ localStorage.removeItem("fleetToken"); }} catch (e) {{}} continue; }}
+    alert("saving difficulty failed: HTTP " + res.status);
+    return false;
+  }}
+  alert("wrong fleet token");
+  return false;
+}}
+document.querySelectorAll("select.diff").forEach((sel) => {{
+  sel.addEventListener("focus", pauseReload);
+  sel.addEventListener("blur", resumeReload);
+  sel.addEventListener("change", async () => {{
+    pauseReload();
+    const ok = await saveDifficulty(sel.dataset.scene, sel.value);
+    if (ok) location.reload(); else resumeReload();
+  }});
+}});
 </script>
 </body></html>"""

@@ -86,6 +86,10 @@ class Database:
         self._conn.execute("PRAGMA synchronous=NORMAL")
         with self._lock, self._conn:
             self._conn.executescript(_SCHEMA)
+            # migrations for columns added after the initial schema
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(scenes)")}
+            if "difficulty" not in cols:
+                self._conn.execute("ALTER TABLE scenes ADD COLUMN difficulty TEXT")
 
     @contextlib.contextmanager
     def _txn(self):
@@ -212,7 +216,7 @@ class Database:
             return self._scene_rows(conn, scene_id=scene_id)[0]
 
     def patch_scene(self, scene_id: str, fields: dict) -> dict | None:
-        allowed = {"target_successes", "priority", "task_description", "retired"}
+        allowed = {"target_successes", "priority", "task_description", "retired", "difficulty"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         with self._txn() as conn:
             if updates:

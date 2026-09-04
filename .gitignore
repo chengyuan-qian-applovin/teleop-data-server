@@ -3,3 +3,4 @@ fleet.env
 __pycache__/
 fleet_data/
 nohup.out
+scene_backup*/

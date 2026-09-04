@@ -132,7 +132,7 @@ episode history. Adjust one scene later with:
 
 ```bash
 curl -X PATCH -H "X-Fleet-Token: $FLEET_TOKEN" -H "Content-Type: application/json" \
-    -d '{"target_successes": 40, "priority": 5}' http://<server>:8099/api/scenes/<scene_id>
+    -d '{"target_successes": 40, "priority": 5, "difficulty": "hard"}' http://<server>:8099/api/scenes/<scene_id>
 ```
 
 (`{"retired": true}` hides a scene from suggestions without deleting its data.)
@@ -166,7 +166,7 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 
 | Method & path | Purpose |
 |---|---|
-| `GET /` | Live HTML dashboard (no token, read-only, refreshes every 5 s). Each scene row expands to show where its scene file lives on the server's disk. |
+| `GET /` | Live HTML dashboard (no token, read-only, refreshes every 5 s). Each scene row expands to show where its scene file lives on the server's disk, and has an editable difficulty dropdown (asks for the fleet token once, kept in the browser). |
 | `GET /api/health` | Liveness probe. |
 | `POST /api/checkin` `{collector_id}` | Startup sync: registers the collector, clears its stale presence, returns the full status snapshot. |
 | `POST /api/heartbeat` `{collector_id, scene_id?}` | Keeps the collector (and its scene presence) marked live; presence goes stale after 120 s of silence. |
@@ -177,7 +177,7 @@ All `/api/*` endpoints except `/api/health` require `X-Fleet-Token` when
 | `GET /api/scenes` | All scene rows with progress. |
 | `PUT /api/scenes/{id}/file?target_successes=&priority=&task_description=` | Upload/replace a scene file (raw body) and upsert its row. |
 | `GET /api/scenes/{id}/file` | Download a scene file. |
-| `PATCH /api/scenes/{id}` | Change `target_successes` / `priority` / `task_description` / `retired`. |
+| `PATCH /api/scenes/{id}` | Change `target_successes` / `priority` / `task_description` / `difficulty` / `retired`. |
 | `GET /api/docs` | The loose JSON documents in `scenes/` (e.g. `scene_instruct.json`). |
 | `GET /api/docs/{name}` | Download one of those documents. |
 | `PUT /api/episodes/{uuid}/file` | Upload one trajectory HDF5 (raw body; atomic, idempotent). |
